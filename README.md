@@ -53,14 +53,27 @@ src/ ├── main.rs ├── tui/ │   └── terminal.rs └── core
 
 ---
 
-## Install & Run
 
-Requirements:
-- Rust 1.75+
+## Build & Run
 
-Run:
+### Requirements
+- Rust (stable)
+- Linux (Debian/Ubuntu recommended)
+
+### Build (recommended)
 `bash
+
+cargo build --release
+./target/release/wise1738
+
+Run with Cargo (development)
+
 cargo run
+
+Run with Cargo (release mode)
+
+cargo run --release
+
 
 
 
