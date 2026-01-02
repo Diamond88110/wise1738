@@ -47,12 +47,6 @@ These choices keep the project simple, auditable, and portfolio-friendly.
 
 ---
 
-## Project Structure
-
-src/ ├── main.rs ├── tui/ │   └── terminal.rs └── core/ ├── engine.rs ├── scanner.rs ├── ports.rs └── target.rs
-
----
-
 
 ## Build & Run
 
