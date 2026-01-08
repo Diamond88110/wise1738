@@ -85,3 +85,11 @@ exit
 Example:
 
 scan example.com 80-443
+
+scan 127.0.0.1 1-100
+
+Export results:
+
+export json
+export pdf
+
