@@ -1,4 +1,4 @@
-use std::{io, time::Duration};
+use std::{fs, io, time::Duration};
 
 use chrono::Local;
 use crossterm::{
@@ -15,6 +15,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
+
+use printpdf::*;
 
 use crate::core::{
     engine,
@@ -40,6 +42,7 @@ struct App {
     open: Vec<String>,
     closed: Vec<String>,
     scroll: usize,
+    last_results: Vec<ScanResult>,
 }
 
 impl App {
@@ -47,10 +50,11 @@ impl App {
         Self {
             state: UiState::Idle,
             command: String::new(),
-            events: vec![],
+            events: Vec::new(),
             open: Vec::new(),
             closed: Vec::new(),
             scroll: 0,
+            last_results: Vec::new(),
         }
     }
 
@@ -76,6 +80,7 @@ pub fn run() -> io::Result<()> {
 
     let mut app = App::new();
     app.event("WISE1738 ready");
+    app.event("Commands: scan | export json | export pdf | exit");
 
     let res = event_loop(&mut terminal, &mut app);
 
@@ -137,65 +142,159 @@ fn handle_command(cmd: &str, app: &mut App) {
 
     let parts: Vec<&str> = cmd.split_whitespace().collect();
 
-    match parts[0] {
-        "exit" | "q" => {
+    match parts.as_slice() {
+        ["exit"] | ["q"] => {
             app.event("Exit requested");
             app.state = UiState::ExitPending;
         }
-
-        "scan" => {
-            if parts.len() < 2 || parts.len() > 3 {
-                app.event("Usage: scan <ip|domain> [ports]");
-                return;
-            }
-
-            let host = parts[1];
-            let ports = if parts.len() == 3 {
-
-match parse_ports(parts[2]) {
-                    Some(p) => p,
-                    None => {
-                        app.event("Invalid port format");
-                        return;
-                    }
-                }
-            } else {
-                Ports::all()
-            };
-
-            app.open.clear();
-            app.closed.clear();
-            app.scroll = 0;
-
-            app.event(format!("CMD: scan {} {}", host, parts.get(2).unwrap_or(&"")));
-            app.event(format!("Scanning {}", host));
-
-            let results: Vec<ScanResult> = engine::run(host, ports);
-
-            for r in results {
-                let service = if r.service == "unknown" { "" } else { r.service };
-
-                match r.status {
-                    PortStatus::Open => {
-                        app.open.push(format!(
-                            "{:<5} {:<6} {}",
-                            r.port, "OPEN", service
-                        ));
-                    }
-                    PortStatus::Closed | PortStatus::Filtered => {
-                        app.closed.push(format!(
-                            "{:<5} {:<6} {}",
-                            r.port, "CLOSED", service
-                        ));
-                    }
-                }
-            }
-
-            app.event("Scan finished");
-        }
-
+        ["export", "json"] => export_json(app),
+        ["export", "pdf"] => export_pdf(app),
+        ["scan", ..] => handle_scan(parts, app),
         _ => app.event("Unknown command"),
     }
+}
+
+// =======================
+// SCAN HANDLER
+// =======================
+fn handle_scan(parts: Vec<&str>, app: &mut App) {
+    if parts.len() < 2 || parts.len() > 3 {
+        app.event("Usage: scan <ip|domain> [ports]");
+        return;
+    }
+
+    let host = parts[1];
+    let ports = if parts.len() == 3 {
+        match parse_ports(parts[2]) {
+            Some(p) => p,
+            None => {
+                app.event("Invalid port format");
+                return;
+            }
+        }
+    } else {
+        Ports::all()
+    };
+
+    app.open.clear();
+    app.closed.clear();
+    app.scroll = 0;
+    app.last_results.clear();
+
+    app.event(format!("Scanning {}", host));
+
+    let results = engine::run(host, ports);
+
+    for r in &results {
+        let mut service = String::new();
+        if r.service != "unknown" {
+            service.push_str(r.service);
+        }
+        if let Some(os) = r.os_hint {
+            if !service.is_empty() {
+                service.push(' ');
+            }
+            service.push_str(&format!("[{}]", os));
+        }
+
+        match r.status {
+            PortStatus::Open => {
+                app.open.push(format!("{:<5} OPEN   {}", r.port, service));
+            }
+            _ => {
+                app.closed.push(format!("{:<5} CLOSED {}", r.port, service));
+            }
+        }
+    }
+
+    app.last_results = results;
+    app.event("Scan finished");
+}
+
+// =======================
+// EXPORT JSON
+// =======================
+fn export_json(app: &mut App) {
+    if app.last_results.is_empty() {
+        app.event("Nothing to export");
+        return;
+    }
+
+    fs::create_dir_all("export").ok();
+    let file = format!("export/scan_{}.json", Local::now().format("%Y%m%d_%H%M%S"));
+
+    let mut json = String::from("{\"results\":[");
+    for (i, r) in app.last_results.iter().enumerate() {
+        json.push_str(&format!(
+            "{{\"port\":{},\"status\":\"{:?}\",\"service\":\"{}\",\"os\":{}}}",
+            r.port,
+            r.status,
+            r.service,
+            match r.os_hint {
+                Some(os) => format!("\"{}\"", os),
+                None => "null".into(),
+            }
+        ));
+        if i + 1 < app.last_results.len() {
+            json.push(',');
+        }
+    }
+    json.push_str("]}");
+
+    match fs::write(&file, json) {
+        Ok(_) => app.event(format!("Exported JSON → {}", file)),
+        Err(_) => app.event("JSON export failed"),
+    }
+}
+
+// =======================
+// EXPORT PDF (PAGINATED)
+// =======================
+fn export_pdf(app: &mut App) {
+    if app.last_results.is_empty() {
+        app.event("Nothing to export");
+        return;
+    }
+
+    fs::create_dir_all("export").ok();
+    let file_path = format!("export/scan_{}.pdf", Local::now().format("%Y%m%d_%H%M%S"));
+
+    let (doc, mut page, mut layer) =
+        PdfDocument::new("WISE1738 Scan Report", Mm(210.0), Mm(297.0), "Layer");
+
+    let font = doc.add_builtin_font(BuiltinFont::Courier).unwrap();
+    let mut y = Mm(280.0);
+    let line_h = Mm(6.0);
+
+    let mut cur_layer = doc.get_page(page).get_layer(layer);
+    cur_layer.use_text("WISE1738 Scan Report", 14.0, Mm(10.0), y, &font);
+    y -= Mm(12.0);
+
+    for r in &app.last_results {
+        if y.0 < 20.0 {
+            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "Layer");
+            page = p;
+            layer = l;
+            cur_layer = doc.get_page(page).get_layer(layer);
+            y = Mm(280.0);
+        }
+
+        let line = format!(
+            "Port {:<5} {:<8} {} {}",
+            r.port,
+            format!("{:?}", r.status),
+            r.service,
+            r.os_hint.unwrap_or("")
+        );
+
+        cur_layer.use_text(line, 10.0, Mm(10.0), y, &font);
+        y -= line_h;
+    }
+
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&file_path).unwrap());
+    doc.save(&mut file).unwrap();
+
+    app.event(format!("Exported PDF → {}", file_path));
 }
 
 // =======================
@@ -203,11 +302,9 @@ match parse_ports(parts[2]) {
 // =======================
 fn parse_ports(raw: &str) -> Option<Ports> {
     if raw.contains(',') {
-        let mut list = Vec::new();
-        for p in raw.split(',') {
-            list.push(p.parse().ok()?);
-        }
-        Some(Ports::multiple(list))
+        Some(Ports::multiple(
+            raw.split(',').map(|p| p.parse().ok()).collect::<Option<Vec<_>>>()?,
+        ))
     } else if raw.contains('-') {
         let p: Vec<&str> = raw.split('-').collect();
         Some(Ports::range(p[0].parse().ok()?, p[1].parse().ok()?))
@@ -217,7 +314,7 @@ fn parse_ports(raw: &str) -> Option<Ports> {
 }
 
 // =======================
-// UI RENDER
+// UI RENDER (GRID + SCROLL)
 // =======================
 fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     let layout = Layout::default()
@@ -230,14 +327,12 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
         ])
         .split(f.size());
 
-    // STATUS
     f.render_widget(
         Paragraph::new(" WISE1738 | STATE: IDLE ")
             .style(Style::default().fg(Color::Gray)),
         layout[0],
     );
 
-    // COMMAND
     f.render_widget(
         Paragraph::new(format!("> {}", app.command))
             .block(Block::default().title(" COMMAND ").borders(Borders::ALL))
@@ -245,7 +340,6 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
         layout[1],
     );
 
-    // OUTPUT
     let area = layout[2];
     let mut lines: Vec<Line> = Vec::new();
 
@@ -255,10 +349,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
             Style::default().fg(Color::Green),
         )));
         for l in &app.open {
-            lines.push(Line::from(Span::styled(
-                l.clone(),
-                Style::default().fg(Color::Green),
-            )));
+            lines.push(Line::from(Span::styled(l, Style::default().fg(Color::Green))));
         }
         lines.push(Line::from(""));
     }
@@ -288,7 +379,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
         }
     }
 
-let visible = area.height.saturating_sub(2) as usize;
+    let visible = area.height.saturating_sub(2) as usize;
     let max_scroll = lines.len().saturating_sub(visible);
     let start = app.scroll.min(max_scroll);
     let end = (start + visible).min(lines.len());
@@ -299,7 +390,6 @@ let visible = area.height.saturating_sub(2) as usize;
         area,
     );
 
-    // EVENTS
     f.render_widget(
         Paragraph::new(app.events.join("\n"))
             .block(Block::default().title(" EVENTS ").borders(Borders::ALL)),

@@ -22,7 +22,8 @@ pub enum PortStatus {
 pub struct ScanResult {
     pub port: u16,
     pub status: PortStatus,
-    pub service: &'static str, // HAR DOIM BOR
+    pub service: &'static str,   // HAR DOIM BOR
+    pub os_hint: Option<&'static str>, // OS SIGNAL (ixtiyoriy)
 }
 
 const WORKERS: usize = 64;
@@ -43,8 +44,8 @@ pub fn scan(target: &Target, ports: &Ports) -> Vec<ScanResult> {
 
         let h = thread::spawn(move || {
             for port in list {
-                let (status, service) = scan_single(&host, port);
-                let _ = tx.send(ScanResult { port, status, service });
+                let result = scan_single(&host, port);
+                let _ = tx.send(result);
             }
         });
 
@@ -69,12 +70,20 @@ pub fn scan(target: &Target, ports: &Ports) -> Vec<ScanResult> {
 // =======================
 // CORE LOGIC
 // =======================
-fn scan_single(host: &str, port: u16) -> (PortStatus, &'static str) {
-    let default_service = service_name(port);
+
+fn scan_single(host: &str, port: u16) -> ScanResult {
+    let fallback_service = service_name(port);
 
     let addrs = match (host, port).to_socket_addrs() {
         Ok(a) => a.collect::<Vec<_>>(),
-        Err(_) => return (PortStatus::Filtered, default_service),
+        Err(_) => {
+            return ScanResult {
+                port,
+                status: PortStatus::Filtered,
+                service: fallback_service,
+                os_hint: None,
+            }
+        }
     };
 
     let mut saw_timeout = false;
@@ -82,25 +91,34 @@ fn scan_single(host: &str, port: u16) -> (PortStatus, &'static str) {
     for addr in addrs {
         match tcp_connect(addr) {
             TcpResult::Open => {
-                // TCP ochiq — endi protocol probe
-                if let Some(proto) = protocol_probe(addr, host, port) {
-                    return (PortStatus::Open, proto);
-                }
-                return (PortStatus::Open, default_service);
-            }
+                // 1️⃣ SERVICE DETECTION (PROBE → FALLBACK)
+                let service = protocol_probe(addr, host, port)
+                    .unwrap_or(fallback_service);
 
-            TcpResult::Timeout => {
-                saw_timeout = true;
-            }
+                // 2️⃣ OS SIGNAL (HECH QACHON MAJBURIY EMAS)
+                let os_hint = os_detect_signal(port, service);
 
+                return ScanResult {
+                    port,
+                    status: PortStatus::Open,
+                    service,
+                    os_hint,
+                };
+            }
+            TcpResult::Timeout => saw_timeout = true,
             TcpResult::Refused => {}
         }
     }
 
-    if saw_timeout {
-        (PortStatus::Filtered, default_service)
-    } else {
-        (PortStatus::Closed, default_service)
+    ScanResult {
+        port,
+        status: if saw_timeout {
+            PortStatus::Filtered
+        } else {
+            PortStatus::Closed
+        },
+        service: fallback_service,
+        os_hint: None,
     }
 }
 
@@ -128,8 +146,9 @@ fn tcp_connect(addr: SocketAddr) -> TcpResult {
 }
 
 // =======================
-// PROTOCOL PROBES
+// SERVICE DETECTION (PROBES)
 // =======================
+
 fn protocol_probe(addr: SocketAddr, host: &str, port: u16) -> Option<&'static str> {
     match port {
         80 | 8080 | 8000 => http_probe(addr).then_some("HTTP"),
@@ -177,7 +196,7 @@ fn smtp_probe(addr: SocketAddr) -> bool {
     if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(TIMEOUT_MS)) {
         s.set_read_timeout(Some(Duration::from_millis(TIMEOUT_MS))).ok();
         let mut buf = [0u8; 3];
-        return s.read(&mut buf).is_ok(); // "220"
+        return s.read(&mut buf).is_ok();
     }
     false
 }
@@ -201,7 +220,20 @@ fn rdp_probe(addr: SocketAddr) -> bool {
 }
 
 // =======================
-// SERVICE DB (FALLBACK)
+// OS SIGNAL (YENGIL, XAVFSIZ)
+// =======================
+
+fn os_detect_signal(port: u16, service: &str) -> Option<&'static str> {
+    match (port, service) {
+        (445, "SMB") | (3389, "RDP") => Some("Windows"),
+        (22, "SSH") => Some("Unix-like"),
+        (80, "HTTP") | (443, "HTTPS") => Some("Unix-like"),
+        _ => None,
+    }
+}
+
+// =======================
+// FALLBACK SERVICE DB
 // =======================
 fn service_name(port: u16) -> &'static str {
     match port {
@@ -226,7 +258,7 @@ fn service_name(port: u16) -> &'static str {
 }
 
 // =======================
-// TLS CLIENTHELLO (MINIMAL)
+// TLS CLIENT HELLO (MINIMAL)
 // =======================
 fn tls_client_hello() -> Vec<u8> {
     vec![
@@ -240,4 +272,3 @@ fn tls_client_hello() -> Vec<u8> {
         0x01, 0x00,
     ]
 }
-

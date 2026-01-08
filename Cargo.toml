@@ -1,9 +1,10 @@
 [package]
 name = "wise1738"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
 crossterm = "0.27"
 ratatui = "0.26"
 chrono = "0.4"
+printpdf = "0.7"
