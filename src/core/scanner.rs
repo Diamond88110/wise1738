@@ -22,8 +22,9 @@ pub enum PortStatus {
 pub struct ScanResult {
     pub port: u16,
     pub status: PortStatus,
-    pub service: &'static str,   // HAR DOIM BOR
-    pub os_hint: Option<&'static str>, // OS SIGNAL (ixtiyoriy)
+    pub service: &'static str,          // HAR DOIM BOR
+    pub os_hint: Option<&'static str>,  // OS SIGNAL (ixtiyoriy)
+    pub confidence: u8,                 // 0–100 (v0.2.0)
 }
 
 const WORKERS: usize = 64;
@@ -82,7 +83,8 @@ fn scan_single(host: &str, port: u16) -> ScanResult {
                 status: PortStatus::Filtered,
                 service: fallback_service,
                 os_hint: None,
-            }
+                confidence: 0,
+            };
         }
     };
 
@@ -95,14 +97,18 @@ fn scan_single(host: &str, port: u16) -> ScanResult {
                 let service = protocol_probe(addr, host, port)
                     .unwrap_or(fallback_service);
 
-                // 2️⃣ OS SIGNAL (HECH QACHON MAJBURIY EMAS)
+                // 2️⃣ OS SIGNAL (YENGIL, MAJBURIY EMAS)
                 let os_hint = os_detect_signal(port, service);
+
+                // 3️⃣ CONFIDENCE (v0.2.0 YANGILIGI)
+                let confidence = confidence_score(service, &os_hint);
 
                 return ScanResult {
                     port,
                     status: PortStatus::Open,
                     service,
                     os_hint,
+                    confidence,
                 };
             }
             TcpResult::Timeout => saw_timeout = true,
@@ -119,6 +125,7 @@ fn scan_single(host: &str, port: u16) -> ScanResult {
         },
         service: fallback_service,
         os_hint: None,
+        confidence: 0,
     }
 }
 
@@ -150,7 +157,8 @@ fn tcp_connect(addr: SocketAddr) -> TcpResult {
 // =======================
 
 fn protocol_probe(addr: SocketAddr, host: &str, port: u16) -> Option<&'static str> {
-    match port {
+
+match port {
         80 | 8080 | 8000 => http_probe(addr).then_some("HTTP"),
         443 | 8443 => tls_probe(addr, host).then_some("HTTPS"),
         22 => ssh_probe(addr).then_some("SSH"),
@@ -222,13 +230,28 @@ fn rdp_probe(addr: SocketAddr) -> bool {
 // =======================
 // OS SIGNAL (YENGIL, XAVFSIZ)
 // =======================
-
 fn os_detect_signal(port: u16, service: &str) -> Option<&'static str> {
     match (port, service) {
         (445, "SMB") | (3389, "RDP") => Some("Windows"),
         (22, "SSH") => Some("Unix-like"),
         (80, "HTTP") | (443, "HTTPS") => Some("Unix-like"),
         _ => None,
+    }
+}
+
+// =======================
+// CONFIDENCE SCORE (v0.2.0 YANGI)
+// =======================
+fn confidence_score(service: &str, os: &Option<&str>) -> u8 {
+    match (service, os) {
+        ("SSH", Some(_)) => 95,
+        ("HTTP", Some(_)) => 90,
+        ("HTTPS", Some(_)) => 90,
+        ("RDP", Some("Windows")) => 95,
+        ("SMTP", _) => 85,
+        ("MYSQL", _) => 85,
+        ("unknown", _) => 30,
+        _ => 60,
     }
 }
 
@@ -260,6 +283,7 @@ fn service_name(port: u16) -> &'static str {
 // =======================
 // TLS CLIENT HELLO (MINIMAL)
 // =======================
+
 fn tls_client_hello() -> Vec<u8> {
     vec![
         0x16, 0x03, 0x01, 0x00, 0x2e,
@@ -272,3 +296,4 @@ fn tls_client_hello() -> Vec<u8> {
         0x01, 0x00,
     ]
 }
+

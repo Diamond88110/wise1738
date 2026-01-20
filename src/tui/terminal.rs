@@ -187,9 +187,11 @@ fn handle_scan(parts: Vec<&str>, app: &mut App) {
 
     for r in &results {
         let mut service = String::new();
+
         if r.service != "unknown" {
             service.push_str(r.service);
         }
+
         if let Some(os) = r.os_hint {
             if !service.is_empty() {
                 service.push(' ');
@@ -226,14 +228,15 @@ fn export_json(app: &mut App) {
     let mut json = String::from("{\"results\":[");
     for (i, r) in app.last_results.iter().enumerate() {
         json.push_str(&format!(
-            "{{\"port\":{},\"status\":\"{:?}\",\"service\":\"{}\",\"os\":{}}}",
+            "{{\"port\":{},\"status\":\"{:?}\",\"service\":\"{}\",\"os\":{},\"confidence\":{}}}",
             r.port,
             r.status,
             r.service,
             match r.os_hint {
                 Some(os) => format!("\"{}\"", os),
                 None => "null".into(),
-            }
+            },
+            r.confidence
         ));
         if i + 1 < app.last_results.len() {
             json.push(',');
@@ -280,11 +283,12 @@ fn export_pdf(app: &mut App) {
         }
 
         let line = format!(
-            "Port {:<5} {:<8} {} {}",
+            "Port {:<5} {:<8} {:<8} {} {}%",
             r.port,
             format!("{:?}", r.status),
             r.service,
-            r.os_hint.unwrap_or("")
+            r.os_hint.unwrap_or(""),
+            r.confidence
         );
 
         cur_layer.use_text(line, 10.0, Mm(10.0), y, &font);
