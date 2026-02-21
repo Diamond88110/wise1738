@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.2.1] - 2026-02-21
+### Added
+- Full TLS Client Hello probe for HTTPS detection
+- OS hint detection in scan_single
+- Confidence scoring for service identification
+
+### Changed
+- Increased scan timeout to 1500ms for more reliable probes
+- Refined scan_single logic: fallback service detection, OS hint, confidence scoring
+- Multi-threaded scanning maintained (WORKERS=64)
+- Terminal (TUI) minor fixes and improvements
+
+### Fixed
+- Minor bug fixes and code cleanup
+- Improved TCP/HTTP/SSH/SMTP probe reliability
+
 ## [0.2.0] – 2026-01-20
 ### Added
 - Lightweight OS signal detection (non-intrusive)
