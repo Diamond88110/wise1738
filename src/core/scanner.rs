@@ -22,9 +22,9 @@ pub enum PortStatus {
 pub struct ScanResult {
     pub port: u16,
     pub status: PortStatus,
-    pub service: &'static str,          // HAR DOIM BOR
-    pub os_hint: Option<&'static str>,  // OS SIGNAL (ixtiyoriy)
-    pub confidence: u8,                 // 0–100 (v0.2.0)
+    pub service: &'static str,          
+    pub os_hint: Option<&'static str>,  
+    pub confidence: u8,                 
 }
 
 const WORKERS: usize = 64;
@@ -38,94 +38,87 @@ pub fn scan(target: &Target, ports: &Ports) -> Vec<ScanResult> {
     let (tx, rx) = mpsc::channel::<ScanResult>();
     let mut handles = Vec::new();
 
-    for batch in ports.ports.chunks(WORKERS) {
-        let host = host.clone();
-        let tx = tx.clone();
-        let list = batch.to_vec();
+    for batch in ports.ports.chunks(WORKERS) {  
+        let host = host.clone();  
+        let tx = tx.clone();  
+        let list = batch.to_vec();  
 
-        let h = thread::spawn(move || {
-            for port in list {
-                let result = scan_single(&host, port);
-                let _ = tx.send(result);
-            }
-        });
+        let h = thread::spawn(move || {  
+            for port in list {  
+                let result = scan_single(&host, port);  
+                let _ = tx.send(result);  
+            }  
+        });  
 
-        handles.push(h);
-    }
+        handles.push(h);  
+    }  
 
-    drop(tx);
+    drop(tx);  
 
-    let mut results = Vec::new();
-    for r in rx {
-        results.push(r);
-    }
+    let mut results = Vec::new();  
+    for r in rx {  
+        results.push(r);  
+    }  
 
-    for h in handles {
-        let _ = h.join();
-    }
+    for h in handles {  
+        let _ = h.join();  
+    }  
 
-    results.sort_by_key(|r| r.port);
+    results.sort_by_key(|r| r.port);  
     results
 }
 
 // =======================
 // CORE LOGIC
 // =======================
-
 fn scan_single(host: &str, port: u16) -> ScanResult {
     let fallback_service = service_name(port);
 
-    let addrs = match (host, port).to_socket_addrs() {
-        Ok(a) => a.collect::<Vec<_>>(),
-        Err(_) => {
-            return ScanResult {
-                port,
-                status: PortStatus::Filtered,
-                service: fallback_service,
-                os_hint: None,
-                confidence: 0,
-            };
-        }
-    };
+    let addrs = match (host, port).to_socket_addrs() {  
+        Ok(a) => a.collect::<Vec<_>>(),  
+        Err(_) => {  
+            return ScanResult {  
+                port,  
+                status: PortStatus::Filtered,  
+                service: fallback_service,  
+                os_hint: None,  
+                confidence: 0,  
+            };  
+        }  
+    };  
 
-    let mut saw_timeout = false;
+    let mut saw_timeout = false;  
 
-    for addr in addrs {
-        match tcp_connect(addr) {
-            TcpResult::Open => {
-                // 1️⃣ SERVICE DETECTION (PROBE → FALLBACK)
-                let service = protocol_probe(addr, host, port)
-                    .unwrap_or(fallback_service);
+    for addr in addrs {  
+        match tcp_connect(addr) {  
+            TcpResult::Open => {  
+                let service = protocol_probe(addr, host, port).unwrap_or(fallback_service);  
+                let os_hint = os_detect_signal(port, service);  
+                let confidence = confidence_score(service, &os_hint);  
 
-                // 2️⃣ OS SIGNAL (YENGIL, MAJBURIY EMAS)
-                let os_hint = os_detect_signal(port, service);
+                return ScanResult {  
+                    port,  
+                    status: PortStatus::Open,  
+                    service,  
+                    os_hint,  
+                    confidence,  
+                };  
+            }  
+            TcpResult::Timeout => saw_timeout = true,  
+            TcpResult::Refused => {}  
+        }  
+    }  
 
-                // 3️⃣ CONFIDENCE (v0.2.0 YANGILIGI)
-                let confidence = confidence_score(service, &os_hint);
-
-                return ScanResult {
-                    port,
-                    status: PortStatus::Open,
-                    service,
-                    os_hint,
-                    confidence,
-                };
-            }
-            TcpResult::Timeout => saw_timeout = true,
-            TcpResult::Refused => {}
-        }
-    }
-
-    ScanResult {
-        port,
-        status: if saw_timeout {
-            PortStatus::Filtered
-        } else {
-            PortStatus::Closed
-        },
-        service: fallback_service,
-        os_hint: None,
-        confidence: 0,
+    ScanResult {  
+        port,  
+        status: if saw_timeout {  
+            PortStatus::Filtered  
+        } else {  
+            PortStatus::Closed  
+        },  
+        service: fallback_service,  
+        os_hint: None,  
+        confidence: 0,  
     }
 }
 
@@ -155,10 +148,8 @@ fn tcp_connect(addr: SocketAddr) -> TcpResult {
 // =======================
 // SERVICE DETECTION (PROBES)
 // =======================
-
 fn protocol_probe(addr: SocketAddr, host: &str, port: u16) -> Option<&'static str> {
-
-match port {
+    match port {
         80 | 8080 | 8000 => http_probe(addr).then_some("HTTP"),
         443 | 8443 => tls_probe(addr, host).then_some("HTTPS"),
         22 => ssh_probe(addr).then_some("SSH"),
@@ -228,7 +219,7 @@ fn rdp_probe(addr: SocketAddr) -> bool {
 }
 
 // =======================
-// OS SIGNAL (YENGIL, XAVFSIZ)
+// OS SIGNAL
 // =======================
 fn os_detect_signal(port: u16, service: &str) -> Option<&'static str> {
     match (port, service) {
@@ -240,7 +231,7 @@ fn os_detect_signal(port: u16, service: &str) -> Option<&'static str> {
 }
 
 // =======================
-// CONFIDENCE SCORE (v0.2.0 YANGI)
+// CONFIDENCE SCORE
 // =======================
 fn confidence_score(service: &str, os: &Option<&str>) -> u8 {
     match (service, os) {
@@ -281,19 +272,22 @@ fn service_name(port: u16) -> &'static str {
 }
 
 // =======================
-// TLS CLIENT HELLO (MINIMAL)
+// TLS CLIENT HELLO (FULL, TLS 1.2)
 // =======================
-
 fn tls_client_hello() -> Vec<u8> {
     vec![
-        0x16, 0x03, 0x01, 0x00, 0x2e,
-        0x01, 0x00, 0x00, 0x2a,
+        0x16, 0x03, 0x01, 0x00, 0x4f,
+        0x01, 0x00, 0x00, 0x4b,
         0x03, 0x03,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x02, 0x13, 0x01,
+        0x53, 0x43, 0x4f, 0x52, 0x45, 0x00, 0x01, 0x02,
+        0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+        0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12,
+        0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a,
+        0x00,
+        0x00, 0x06, 0x00, 0x2f, 0x00, 0x35, 0x00, 0x0a,
         0x01, 0x00,
+        0x00, 0x0d, 0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x17,
+        0x00, 0x0b, 0x00, 0x02, 0x01, 0x00,
     ]
 }
 
