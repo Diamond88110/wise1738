@@ -75,18 +75,21 @@ Usage
 Inside the terminal:
 
 
-scan <ip|domain>
-scan <ip|domain> 80
-scan <ip|domain> 22,80,443
-scan <ip|domain> 1-1024
+scan -a <ip|domain>
+scan -a <ip|domain> -p 80
+scan -a <ip|domain> -p 22,80,443
+scan -a <ip|domain> -p 1-1024
 exit
+
+-a = Addres
+-p = Ports
 
 
 Example:
 
-scan example.com 80-443
+scan -a example.com -p 80-443
 
-scan 127.0.0.1 1-100
+scan -a 127.0.0.1 -p 1-100
 
 Export results:
 
