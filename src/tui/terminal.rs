@@ -80,7 +80,7 @@ pub fn run() -> io::Result<()> {
 
     let mut app = App::new();
     app.event("WISE1738 ready");
-    app.event("Commands: scan | export json | export pdf | exit");
+    app.event("Commands: scan -a <host> -p <ports> | export json | export pdf | exit");
 
     let res = event_loop(&mut terminal, &mut app);
 
@@ -155,25 +155,45 @@ fn handle_command(cmd: &str, app: &mut App) {
 }
 
 // =======================
-// SCAN HANDLER
+// SCAN HANDLER (FLAG-BASED)
 // =======================
 fn handle_scan(parts: Vec<&str>, app: &mut App) {
-    if parts.len() < 2 || parts.len() > 3 {
-        app.event("Usage: scan <ip|domain> [ports]");
-        return;
+    let mut host = None;
+    let mut ports = None;
+
+    // ✅ Host (-a) va ports (-p) flaglarini aniqlash
+    let mut i = 1; // 0 index = "scan"
+    while i < parts.len() {
+        match parts[i] {
+            "-a" => {
+                host = parts.get(i + 1).copied();
+                i += 2;
+            }
+            "-p" => {
+                ports = parts.get(i + 1).copied();
+                i += 2;
+            }
+            _ => i += 1,
+        }
     }
 
-    let host = parts[1];
-    let ports = if parts.len() == 3 {
-        match parse_ports(parts[2]) {
+    let host = match host {
+        Some(h) => h,
+        None => {
+            app.event("Usage: scan -a <ip|domain> -p <ports>");
+            return;
+        }
+    };
+
+    let ports = match ports {
+        Some(p) => match parse_ports(p) {
             Some(p) => p,
             None => {
                 app.event("Invalid port format");
                 return;
             }
-        }
-    } else {
-        Ports::all()
+        },
+        None => Ports::all(),
     };
 
     app.open.clear();
@@ -282,7 +302,7 @@ fn export_pdf(app: &mut App) {
             y = Mm(280.0);
         }
 
-        let line = format!(
+let line = format!(
             "Port {:<5} {:<8} {:<8} {} {}%",
             r.port,
             format!("{:?}", r.status),
